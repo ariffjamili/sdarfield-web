@@ -1,0 +1,5 @@
+---
+deployment:
+  tasks:
+  - export DEPLOYPATH=/Users/ariffjamili/Sites/sdarfield/
+  - /bin/cp -R * $DEPLOYPATH
