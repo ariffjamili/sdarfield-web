@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SDAR Field Rehabilitation Project</title>
+    
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Google Font (Inter) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- Firebase SDK Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getFirestore, 
+            collection, 
+            addDoc, 
+            query, 
+            where, 
+            onSnapshot, 
+            serverTimestamp,
+            setLogLevel
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Firebase Configuration (Provided by Environment) ---
+        let appId, db, auth, userId; // Removed firebaseConfig from this line
+        
+        // Your web app's Firebase configuration
+        const firebaseConfig = {
+          apiKey: "AIzaSyC3AK7ajQ8yzn9xwTy4PniDv_7bz97FwMA",
+          authDomain: "sdar-field-rehab.firebaseapp.com",
+          projectId: "sdar-field-rehab",
+          storageBucket: "sdar-field-rehab.firebasestorage.app",
+          messagingSenderId: "70995705826",
+          appId: "1:70995705826:web:9a027ee70f70b818f943bb"
+        };
+        
+        try {
+            appId = firebaseConfig.appId; // Get appId from your config
+            
+            // Initialize Firebase
+            const app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
+            setLogLevel('Debug'); // Enable for detailed logs
+
+        } catch (error) {
+            console.error("Firebase initialization failed:", error);
+            document.getElementById('page-loader-text').innerText = 'Error loading project data. Please refresh.';
+        }
+
+        // --- DOM Elements ---
+        const pageLoader = document.getElementById('page-loader');
+        const mobileMenu = document.getElementById('mobile-menu');
+        const menuButton = document.getElementById('menu-button');
+        const commentsList = document.getElementById('comments-list');
+        const commentForm = document.getElementById('comment-form');
+        const commentName = document.getElementById('comment-name');
+        const commentText = document.getElementById('comment-text');
+        const commentSubmitButton = document.getElementById('comment-submit-button');
+        const commentSpinner = document.getElementById('comment-spinner');
+        const messageModal = document.getElementById('message-modal');
+        const messageModalText = document.getElementById('message-modal-text');
+        const messageModalClose = document.getElementById('message-modal-close');
+
+        // --- Helper Functions ---
+
+        /**
+         * Formats a Firestore Timestamp or Date object into a readable string.
+         */
+        function formatCommentDate(timestamp) {
+            if (!timestamp) return 'Just now';
+            const date = timestamp.toDate(); // Convert Firestore Timestamp to JS Date
+            return date.toLocaleDateString('en-US', {
+                year: 'numeric',
+                month: 'long',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+
+        /**
+         * Shows the message modal.
+         */
+        function showModal(message) {
+            messageModalText.innerText = message;
+            messageModal.classList.remove('hidden');
+            messageModal.classList.add('flex');
+        }
+
+        /**
+         * Hides the message modal.
+         */
+        function hideModal() {
+            messageModal.classList.add('hidden');
+            messageModal.classList.remove('flex');
+        }
+
+        // --- Core Logic ---
+
+        /**
+         * Authenticates the user (anonymously or with token).
+         */
+        async function initializeAuth() {
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    console.log("User authenticated:", user.uid);
+                    userId = user.uid;
+                    // User is signed in, load comments and hide loader
+                    loadComments();
+                    pageLoader.classList.add('opacity-0', 'pointer-events-none');
+                } else {
+                    console.log("User not signed in. Attempting sign-in.");
+                    userId = null;
+                    signIn(); // Try to sign in if not already
+                }
+            });
+
+            await signIn();
+        }
+
+        /**
+         * Signs the user in.
+         */
+        async function signIn() {
+            try {
+                // For a deployed website, we *only* want to use anonymous sign-in.
+                // The __initial_auth_token is for the Canvas environment and will cause a mismatch error
+                // when used with your personal Firebase project.
+                console.log("Signing in anonymously...");
+                await signInAnonymously(auth);
+            } catch (error) {
+                console.error("Authentication failed:", error);
+                document.getElementById('page-loader-text').innerText = 'Error connecting. Please refresh.';
+            }
+        }
+
+        /**
+         * Loads and displays approved comments from Firestore.
+         */
+        function loadComments() {
+            if (!db || !appId) return;
+
+            const commentsCollectionPath = `artifacts/${appId}/public/data/comments`;
+            const commentsRef = collection(db, commentsCollectionPath);
+            
+            // Query for comments that are approved
+            const q = query(commentsRef, where("isApproved", "==", true));
+
+            onSnapshot(q, (snapshot) => {
+                commentsList.innerHTML = ''; // Clear existing comments
+
+                if (snapshot.empty) {
+                    commentsList.innerHTML = '<p class="text-gray-500 text-center col-span-1">Be the first to leave a comment!</p>';
+                    return;
+                }
+
+                // Get docs and sort them in JavaScript (client-side) to avoid index requirement
+                const docs = snapshot.docs.map(doc => ({ id: doc.id, data: doc.data() }));
+                
+                docs.sort((a, b) => {
+                    const timeA = a.data.timestamp ? a.data.timestamp.toDate() : 0;
+                    const timeB = b.data.timestamp ? b.data.timestamp.toDate() : 0;
+                    return timeB - timeA; // Newest first
+                });
+
+                // Render sorted comments
+                docs.forEach((doc) => {
+                    const comment = doc.data;
+                    const commentEl = document.createElement('div');
+                    commentEl.className = 'bg-white p-5 rounded-lg shadow-sm border border-gray-200';
+                    commentEl.innerHTML = `
+                        <div class="flex justify-between items-center mb-2">
+                            <h4 class="font-semibold text-lg text-blue-800">${escapeHTML(comment.name)}</h4>
+                            <span class="text-xs text-gray-500">${formatCommentDate(comment.timestamp)}</span>
+                        </div>
+                        <p class="text-gray-700">${escapeHTML(comment.comment)}</p>
+                    `;
+                    commentsList.appendChild(commentEl);
+                });
+            }, (error) => {
+                console.error("Error loading comments:", error);
+                commentsList.innerHTML = '<p class="text-red-500 text-center col-span-1">Could not load comments at this time.</p>';
+            });
+        }
+
+        /**
+         * Handles the comment form submission.
+         */
+        async function handleCommentSubmit(e) {
+            e.preventDefault();
+            if (!db || !userId) {
+                showModal('Error: Not connected. Please refresh.');
+                return;
+            }
+
+            const name = commentName.value.trim();
+            const comment = commentText.value.trim();
+
+            if (!name || !comment) {
+                showModal('Please fill out both your name and comment.');
+                return;
+            }
+
+            // Show loading spinner, disable button
+            commentSubmitButton.disabled = true;
+            commentSpinner.classList.remove('hidden');
+
+            try {
+                const commentsCollectionPath = `artifacts/${appId}/public/data/comments`;
+                await addDoc(collection(db, commentsCollectionPath), {
+                    name: name,
+                    comment: comment,
+                    timestamp: serverTimestamp(),
+                    isApproved: false, // Default to false for admin approval
+                    userId: userId
+                });
+
+                // Success
+                commentForm.reset();
+                showModal('Success! Your comment has been submitted for approval.');
+
+            } catch (error) {
+                console.error("Error adding comment:", error);
+                showModal('Error: Could not submit your comment. Please try again.');
+            } finally {
+                // Hide loading spinner, enable button
+                commentSubmitButton.disabled = false;
+                commentSpinner.classList.add('hidden');
+            }
+        }
+
+        /**
+         * Escapes HTML to prevent XSS.
+         */
+        function escapeHTML(str) {
+            return str.replace(/[&<>"']/g, function(m) {
+                return {
+                    '&': '&amp;',
+                    '<': '&lt;',
+                    '>': '&gt;',
+                    '"': '&quot;',
+                    "'": '&#39;'
+                }[m];
+            });
+        }
+        
+        // --- Event Listeners ---
+        window.addEventListener('load', initializeAuth);
+        commentForm.addEventListener('submit', handleCommentSubmit);
+        messageModalClose.addEventListener('click', hideModal);
+
+        // Mobile Menu Toggle
+        menuButton.addEventListener('click', () => {
+            mobileMenu.classList.toggle('hidden');
+        });
+
+        // Close mobile menu when a nav link is clicked
+        document.querySelectorAll('#mobile-menu a, #nav-links a').forEach(link => {
+            link.addEventListener('click', () => {
+                mobileMenu.classList.add('hidden');
+            });
+        });
+
+    </script>
+
+    <style>
+        /* Use Inter font */
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+
+        /* Custom styles for the cost breakdown chart */
+        .chart-bar {
+            position: relative;
+            background-color: #2563EB; /* bg-blue-600 */
+            border-radius: 0.25rem;
+            transition: all 0.3s ease-in-out;
+        }
+        .chart-bar:hover {
+            background-color: #1D4ED8; /* bg-blue-800 */
+        }
+        .chart-label {
+            position: absolute;
+            bottom: -1.75rem;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.75rem;
+            color: #4B5563; /* text-gray-600 */
+            white-space: nowrap;
+        }
+        .chart-value {
+            position: absolute;
+            top: -1.5rem;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #1F2937; /* text-gray-800 */
+        }
+
+        /* Custom vertical timeline */
+        .timeline-item {
+            position: relative;
+            padding-left: 2.5rem;
+            padding-bottom: 2rem;
+            border-left: 2px solid #D1D5DB; /* border-gray-300 */
+        }
+        .timeline-item:last-child {
+            border-left: 2px solid transparent;
+            padding-bottom: 0;
+        }
+        .timeline-dot {
+            position: absolute;
+            left: -0.6rem;
+            top: 0;
+            width: 1.125rem;
+            height: 1.125rem;
+            background-color: #1D4ED8; /* bg-blue-800 */
+            border-radius: 9999px;
+            border: 2px solid white;
+        }
+    </style>
+</head>
+<body class="bg-white text-gray-800">
+
+    <!-- Page Loader -->
+    <div id="page-loader" class="fixed inset-0 bg-white z-[100] flex flex-col justify-center items-center transition-opacity duration-500">
+        <svg class="animate-spin h-12 w-12 text-blue-700" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8
+ 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+        </svg>
+        <p id="page-loader-text" class="mt-4 text-lg text-gray-700">Loading Project Data...</p>
+    </div>
+
+    <!-- Message Modal -->
+    <div id="message-modal" class="hidden fixed inset-0 bg-gray-900 bg-opacity-75 z-[101] flex justify-center items-center p-4">
+        <div class="bg-white rounded-lg shadow-xl p-6 w-full max-w-md text-center">
+            <p id="message-modal-text" class="text-lg text-gray-800 mb-6">Your message here.</p>
+            <button id="message-modal-close" class="bg-blue-700 text-white font-semibold px-6 py-2 rounded-lg shadow hover:bg-blue-800 transition-colors">
+                OK
+            </button>
+        </div>
+    </div>
+
+    <!-- Header & Navigation -->
+    <nav class="sticky top-0 z-50 bg-white/95 backdrop-blur-sm shadow-md">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-20">
+                <!-- Logo & Title -->
+                <div class="flex items-center space-x-4">
+                    <img src="https://placehold.co/50x50/0A2351/FFFFFF?text=SDARA&font=inter" alt="SDARA Logo" class="h-10 w-10 rounded-full">
+                    <img src="https://placehold.co/120x40/C8102E/FFFFFF?text=SDAR+LIONS&font=inter" alt="Persatuan Alumni SDAR LIONS Logo" class="h-10 hidden sm:block">
+                    <span class="text-xl sm:text-2xl font-bold text-blue-900 hidden md:block">SDAR Field Project</span>
+                </div>
+                
+                <!-- Desktop Nav -->
+                <div id="nav-links" class="hidden md:flex items-center space-x-6">
+                    <a href="#overview" class="text-gray-600 hover:text-blue-700 font-medium transition-colors">Overview</a>
+                    <a href="#timeline" class="text-gray-600 hover:text-blue-700 font-medium transition-colors">Timeline</a>
+                    <a href="#financials" class="text-gray-600 hover:text-blue-700 font-medium transition-colors">Financials</a>
+                    <a href="#implementation" class="text-gray-600 hover:text-blue-700 font-medium transition-colors">Implementation</a>
+                    <a href="#gallery" class="text-gray-600 hover:text-blue-700 font-medium transition-colors">Gallery</a>
+                    <a href="#comments" class="text-gray-600 hover:text-blue-700 font-medium transition-colors">Comments</a>
+                    <a href="#conclusion" class="bg-blue-700 text-white px-4 py-2 rounded-md text-sm font-semibold shadow-lg hover:bg-blue-800 transition-colors">Conclusion</a>
+                </div>
+
+                <!-- Mobile Menu Button -->
+                <div class="md:hidden flex items-center">
+                    <button id="menu-button" class="inline-flex items-center justify-center p-2 rounded-md text-gray-500 hover:text-gray-700 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500">
+                        <span class="sr-only">Open main menu</span>
+                        <svg class="h-6 w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Mobile Menu -->
+        <div id="mobile-menu" class="hidden md:hidden bg-white shadow-lg border-t border-gray-200">
+            <div class="px-2 pt-2 pb-3 space-y-1 sm:px-3">
+                <a href="#overview" class="block px-3 py-2 rounded-md text-base font-medium text-gray-700 hover:bg-gray-100">Overview</a>
+                <a href="#timeline" class="block px-3 py-2 rounded-md text-base font-medium text-gray-700 hover:bg-gray-100">Timeline</a>
+                <a href="#financials" class="block px-3 py-2 rounded-md text-base font-medium text-gray-700 hover:bg-gray-100">Financials</a>
+                <a href="#implementation" class="block px-3 py-2 rounded-md text-base font-medium text-gray-700 hover:bg-gray-100">Implementation</a>
+                <a href="#gallery" class="block px-3 py-2 rounded-md text-base font-medium text-gray-700 hover:bg-gray-100">Gallery</a>
+                <a href="#comments" class="block px-3 py-2 rounded-md text-base font-medium text-gray-700 hover:bg-gray-100">Comments</a>
+                <a href="#conclusion" class="block px-3 py-2 rounded-md text-base font-medium text-white bg-blue-700 hover:bg-blue-800">Conclusion</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main>
+        <!-- Hero Section -->
+        <header class="relative bg-gradient-to-r from-blue-900 to-blue-700 text-white pt-24 pb-32 px-6 lg:px-8 text-center">
+            <div class="absolute inset-0 opacity-10">
+                <!-- Placeholder for a background image of a field -->
+                <img src="https://placehold.co/1920x1080/000000/FFFFFF?text=Field+Background&opacity=10" class="w-full h-full object-cover" alt="">
+            </div>
+            <div class="relative max-w-4xl mx-auto">
+                <h1 class="text-4xl md:text-6xl font-extrabold tracking-tight mb-4">SDAR Field Rehabilitation Project</h1>
+                <p class="text-xl md:text-2xl text-blue-100 max-w-3xl mx-auto">
+                    Restoring the school's playing field to new standards of safety, usability, and performance.
+                </p>
+                <a href="#overview" class="mt-10 inline-block bg-white text-blue-800 font-semibold px-8 py-3 rounded-lg shadow-lg hover:bg-gray-100 transition-colors text-lg">
+                    Discover The Project
+                </a>
+            </div>
+        </header>
+
+        <!-- Project Overview -->
+        <section id="overview" class="py-20 md:py-28 px-6 lg:px-8">
+            <div class="max-w-4xl mx-auto">
+                <h2 class="text-3xl md:text-4xl font-bold text-center text-blue-900 mb-12">Project Overview</h2>
+                <div class="text-lg text-gray-700 leading-relaxed space-y-6 text-justify">
+                    <p>
+                        The SDAR Field Rehabilitation Project was initiated to restore and enhance the school's playing field, ensuring it meets rigorous safety, usability, and performance standards. This comprehensive project included vital infrastructure improvements, the planting of new, durable turf, significant drainage upgrades, and the installation of a modern irrigation system.
+                    </p>
+                    <p>
+                        A key emphasis was placed on involving the entire school community, including staff, students, SDARA, and parents. This inclusive approach aimed to foster long-term sustainability, cultivate a profound sense of belonging, and create a lasting legacy for future generations, all under the guiding spirit of "Berilmu Untuk Berjasa".
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Objectives -->
+        <section id="objectives" class="py-20 md:py-28 px-6 lg:px-8 bg-gray-50">
+            <div class="max-w-7xl mx-auto">
+                <h2 class="text-3xl md:text-4xl font-bold text-center text-blue-900 mb-16">Our Objectives</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                    <!-- Objective 1 -->
+                    <div class="bg-white p-8 rounded-xl shadow-lg border border-gray-100">
+                        <svg class="h-12 w-12 text-blue-700 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 17l-4 4m0 0l-4-4m4 4V3" />
+                        </svg>
+                        <h3 class="text-xl font-semibold text-gray-900 mb-2">Improve Drainage</h3>
+                        <p class="text-gray-600">Enhance field drainage and surface conditions to prevent waterlogging.</p>
+                    </div>
+                    <!-- Objective 2 -->
+                    <div class="bg-white p-8 rounded-xl shadow-lg border border-gray-100">
+                         <svg class="h-12 w-12 text-blue-700 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 21v-4m0 0V5a2 2 0 012-2h6.5l1 1H21l-3 6 3 6h-8.5l-1-1H5a2 2 0 00-2 2zm9-13.5V9"/>
+                        </svg>
+                        <h3 class="text-xl font-semibold text-gray-900 mb-2">New Grass Turf</h3>
+                        <p class="text-gray-600">Plant new, durable grass turf suitable for sports and recreational activities.</p>
+                    </div>
+                    <!-- Objective 3 -->
+                    <div class="bg-white p-8 rounded-xl shadow-lg border border-gray-100">
+                        <svg class="h-12 w-12 text-blue-700 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9.25a6.25 6.25 0 00-12.5 0"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9.25v7.5a2 2 0 01-2 2h-1.5a2 2 0 01-2-2v-1.375a.625.625 0 00-1.25 0V18.5a2 2 0 01-2 2H6a2 2 0 01-2-2v-7.5"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 2.75v-1.5m0 18.5v-1.5m6.25-12h1.5m-18.5 0h1.5"/>
+                        </svg>
+                        <h3 class="text-xl font-semibold text-gray-900 mb-2">Efficient Irrigation</h3>
+                        <p class="text-gray-600">Install an efficient and modern irrigation system for sustainable maintenance.</p>
+                    </div>
+                    <!-- Objective 4 -->
+                    <div class="bg-white p-8 rounded-xl shadow-lg border border-gray-100">
+                        <svg class="h-12 w-12 text-blue-700 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-2.121M17 20v1M17 20H8.887c-2.614 0-4.99-1.42-6.324-3.639A8 8 0 1115 5.235"/>
+                        </svg>
+                        <h3 class="text-xl font-semibold text-gray-900 mb-2">Community Engagement</h3>
+                        <p class="text-gray-600">Engage the school and SDARA community throughout the execution process.</p>
+                    </div>
+                    <!-- Objective 5 -->
+                    <div class="bg-white p-8 rounded-xl shadow-lg border border-gray-100">
+                         <svg class="h-12 w-12 text-blue-700 mb-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728m-9.9-2.828a4 4 0 010-5.656m5.656 0a4 4 0 010 5.656"/>
+                        </svg>
+                        <h3 class="text-xl font-semibold text-gray-900 mb-2">Ensure Sustainability</h3>
+                        <p class="text-gray-600">Implement proper fertilization and compost application for long-term health.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Timeline -->
+        <section id="timeline" class="py-20 md:py-28 px-6 lg:px-8">
+            <div class="max-w-4xl mx-auto">
+                <h2 class="text-3xl md:text-4xl font-bold text-center text-blue-900 mb-16">Project Timeline & Milestones</h2>
+                <div class="max-w-2xl mx-auto">
+                    <!-- Timeline Item 1 -->
+                    <div class="timeline-item">
+                        <div class="timeline-dot"></div>
+                        <h3 class="text-lg font-semibold text-gray-900 mb-1">Stage 1: Kick-off & Site Preparation</h3>
+                        <time class="text-sm text-gray-500 mb-2 block">Dec 25, 2024 - Jan 08, 2025</time>
+                        <p class="text-gray-700">Initial project kickoff and preparing the site for rehabilitation work.</p>
+                    </div>
+                    <!-- Timeline Item 2 -->
+                    <div class="timeline-item">
+                        <div class="timeline-dot"></div>
+                        <h3 class="text-lg font-semibold text-gray-900 mb-1">Stage 2: Subsoil Piping & Cambering</h3>
+                        <time class="text-sm text-gray-500 mb-2 block">Jan 08 - Jan 22, 2025</time>
+                        <p class="text-gray-700">Installation of drainage pipes and correcting the field's camber for water runoff.</p>
+                    </div>
+                    <!-- Timeline Item 3 -->
+                    <div class="timeline-item">
+                        <div class="timeline-dot"></div>
+                        <h3 class="text-lg font-semibold text-gray-900 mb-1">Stage 3: Grass Laying & Irrigation</h3>
+                        <time class="text-sm text-gray-500 mb-2 block">Feb 05 - Feb 19, 2025</time>
+                        <p class="text-gray-700">Planting of new cow grass sods and installation of the irrigation system.</p>
+                    </div>
+                    <!-- Timeline Item 4 -->
+                    <div class="timeline-item">
+                        <div class="timeline-dot"></div>
+                        <h3 class="text-lg font-semibold text-gray-900 mb-1">Stage 4: Growth Monitoring & Maintenance</h3>
+                        <time class="text-sm text-gray-500 mb-2 block">Mar 05 - Jun 25, 2025</time>
+                        <p class="text-gray-700">A crucial phase of careful watering, monitoring, and initial maintenance for healthy turf growth.</p>
+                    </div>
+                    <!-- Timeline Item 5 -->
+                    <div class="timeline-item">
+                        <div class="timeline-dot"></div>
+                        <h3 class="text-lg font-semibold text-gray-900 mb-1">Stage 5: Top Dressing & Aeration</h3>
+                        <time class="text-sm text-gray-500 mb-2 block">Apr 02 - Jun 11, 2025</time>
+                        <p class="text-gray-700">Applying fine sand (top dressing) and aerating the soil to improve surface level and health.</p>
+                    </div>
+                    <!-- Timeline Item 6 -->
+                    <div class="timeline-item">
+                        <div class="timeline-dot"></div>
+                        <h3 class="text-lg font-semibold text-gray-900 mb-1">Stage 6: Finishing & Field Handover</h3>
+                        <time class="text-sm text-gray-500 mb-2 block">July 5, 2025</time>
+                        <p class="text-gray-700">Final touches and official handover of the completed field, six months ahead of the initial schedule.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Financials -->
+        <section id="financials" class="py-20 md:py-28 px-6 lg:px-8 bg-gray-50">
+            <div class="max-w-7xl mx-auto">
+                <h2 class="text-3xl md:text-4xl font-bold text-center text-blue-900 mb-16">Financial Summary</h2>
+                
+                <!-- Key Stats -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-16">
+                    <div class="bg-white p-6 rounded-lg shadow-md text-center">
+                        <h3 class="text-lg font-medium text-gray-500 mb-1">Total Project Cost</h3>
+                        <p class="text-4xl font-bold text-blue-800">RM148,534.07</p>
+                    </div>
+                    <div class="bg-white p-6 rounded-lg shadow-md text-center">
+                        <h3 class="text-lg font-medium text-gray-500 mb-1">Fundraised (Crowdfund)</h3>
+                        <p class="text-4xl font-bold text-green-600">RM141,222.00</p>
+                    </div>
+                    <div class="bg-white p-6 rounded-lg shadow-md text-center">
+                        <h3 class="text-lg font-medium text-gray-500 mb-1">Funded by PASL</h3>
+                        <p class="text-4xl font-bold text-blue-800">RM7,312.07</p>
+                    </div>
+                </div>
+
+                <!-- Cost Breakdown Chart -->
+                <div class="bg-white p-8 rounded-lg shadow-lg mb-16">
+                    <h3 class="text-2xl font-semibold text-gray-900 mb-8 text-center">Project Cost Breakdown</h3>
+                    <div class="w-full h-80 flex items-end justify-around px-4 pb-10" role="img" aria-label="Project Cost Breakdown Bar Chart">
+                        <!-- Data from PDF: Materials (56,941), Grass (40,057), Machinery (17,600), Top Dressing (14,180), etc. -->
+                        <!-- The values are percentages of the max value (Materials) -->
+                        <div class="chart-bar" style="height: 100%;" title="Materials: RM56,941.60">
+                            <span class="chart-value">38%</span>
+                            <span class="chart-label">Materials</span>
+                        </div>
+                        <div class="chart-bar" style="height: 70.3%;" title="Grass: RM40,057.74">
+                            <span class="chart-value">27%</span>
+                            <span class="chart-label">Grass</span>
+                        </div>
+                        <div class="chart-bar" style="height: 30.9%;" title="Machinery: RM17,600.00">
+                            <span class="chart-value">11%</span>
+                            <span class="chart-label">Machinery</span>
+                        </div>
+                        <div class="chart-bar" style="height: 24.9%;" title="Top Dressing: RM14,180.00">
+                            <span class="chart-value">10%</span>
+                            <span class="chart-label">Top Dressing</span>
+                        </div>
+                        <div class="chart-bar" style="height: 13%;" title="Wages: RM7,660.00">
+                            <span class="chart-value">5%</span>
+                            <span class="chart-label">Wages</span>
+                        </div>
+                        <div class="chart-bar" style="height: 12.9%;" title="Compost & Fertilizer: RM7,396.00">
+                            <span class="chart-value">5%</span>
+                            <span class="chart-label">Compost</span>
+                        </div>
+                        <div class="chart-bar" style="height: 8.8%;" title="Other Expenses: RM5,250 + ...">
+                            <span class="chart-value">4%</span>
+                            <span class="chart-label">Other</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Expense Tables -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    <div class="bg-white p-6 rounded-lg shadow-lg">
+                        <h3 class="text-xl font-semibold text-gray-900 mb-4">Expenses by Category</h3>
+                        <table class="w-full text-left text-sm">
+                            <thead class="bg-gray-100">
+                                <tr>
+                                    <th class="p-3 font-medium">Subcategory</th>
+                                    <th class="p-3 font-medium">Key Expenses</th>
+                                    <th class="p-3 font-medium text-right">Amount (RM)</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-gray-200">
+                                <tr>
+                                    <td class="p-3">Field Rehab</td>
+                                    <td class="p-3">Grass, materials, machinery, wages</td>
+                                    <td class="p-3 text-right">134,611.59</td>
+                                </tr>
+                                <tr>
+                                    <td class="p-3">Gotong-Royong</td>
+                                    <td class="p-3">Meals</td>
+                                    <td class="p-3 text-right">538.00</td>
+                                </tr>
+                                <tr>
+                                    <td class="p-3">Irrigation</td>
+                                    <td class="p-3">Machinery</td>
+                                    <td class="p-3 text-right">1,817.75</td>
+                                </tr>
+                                <tr>
+                                    <td class="p-3">Variable Orders</td>
+                                    <td class="p-3">Consultancy, tools, extra materials</td>
+                                    <td class="p-3 text-right">7,474.25</td>
+                                </tr>
+                                <tr class="bg-gray-50 font-semibold">
+                                    <td class="p-3" colspan="2">Total</td>
+                                    <td class="p-3 text-right">148,534.07</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <div class="bg-white p-6 rounded-lg shadow-lg">
+                        <h3 class="text-xl font-semibold text-gray-900 mb-4">Funding Source</h3>
+                        <img src="https://placehold.co/600x400/EEEEEE/333333?text=Padang+SDAR+Fundraising+Chart" alt="Fundraising Chart" class="w-full rounded-lg object-cover">
+                        <p class="text-gray-700 mt-4">
+                            The project was 100% funded by SDARA and Persatuan Alumni SDAR Lions (PASL) through a crowdfunding drive. Support came from alumni batches spanning from the 1960s to 2023, showcasing the strong community spirit.
+                        </p>
+                    </div>
+                </div>
+
+            </div>
+        </section>
+
+        <!-- Implementation / Key Activities -->
+        <section id="implementation" class="py-20 md:py-28 px-6 lg:px-8">
+            <div class="max-w-7xl mx-auto">
+                <h2 class="text-3xl md:text-4xl font-bold text-center text-blue-900 mb-16">Project Implementation</h2>
+                
+                <!-- Activity 1: Field Plotting -->
+                <div class="mb-20">
+                    <h3 class="text-2xl font-semibold text-gray-900 mb-4">1. Field Plotting & Water Level Measurement</h3>
+                    <p class="text-lg text-gray-700 leading-relaxed mb-8">
+                        The first step was to identify the field's high and low points to plan the "crowning." Crowning raises the center of the field, allowing water to naturally drain to the edges. This process revealed that low points in the middle were causing water residue and damaging the turf, especially during the rainy season.
+                    </p>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <img src="https://placehold.co/600x400/EEEEEE/333333?text=Field+Surveying+Photo" alt="Field Surveying" class="rounded-lg shadow-md w-full h-auto object-cover">
+                        <img src="https://placehold.co/600x400/EEEEEE/333333?text=Interpolated+Water+Level+Contour+Map" alt="Water Level Contour Map" class="rounded-lg shadow-md w-full h-auto object-cover">
+                    </div>
+                </div>
+
+                <!-- Activity 2: Subsoil Pipe Drainage -->
+                <div class="mb-20">
+                    <h3 class="text-2xl font-semibold text-gray-900 mb-4">2. Subsoil Pipe Drainage Installation</h3>
+                    <p class="text-lg text-gray-700 leading-relaxed mb-8">
+                        To actively remove excess water, 23 HDPE subsoil perforated pipes were installed. These pipes channel water away from the field into the existing monsoon drain. The trenches were layered with crusher run gravel and washed sand to filter the water and prevent clogging.
+                    </p>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <img src="https://placehold.co/600x400/EEEEEE/333333?text=Digging+Drainage+Trenches" alt="Digging Trenches" class="rounded-lg shadow-md w-full h-auto object-cover">
+                        <img src="https://placehold.co/600x400/EEEEEE/333333?text=Installing+Subsoil+Pipes" alt="Installing Pipes" class="rounded-lg shadow-md w-full h-auto object-cover">
+                        <img src="https://placehold.co/600x400/EEEEEE/333333?text=Gravel+and+Sand+Layers" alt="Gravel and Sand" class="rounded-lg shadow-md w-full h-auto object-cover">
+                    </div>
+                </div>
+
+                <!-- Activity 3 & 4: Levelling & Planting -->
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-16 mb-20">
+                    <div>
+                        <h3 class="text-2xl font-semibold text-gray-900 mb-4">3. Surface Levelling</h3>
+                        <p class="text-lg text-gray-700 leading-relaxed mb-8">
+                            Bad soil from the low-lying areas was removed. A large amount of new topsoil was then brought in as backfill material to fill these areas and create the precise crowning curvature designed from the water level data.
+                        </p>
+                        <img src="https://placehold.co/600x400/EEEEEE/333333?text=Surface+Levelling+with+Tractor" alt="Surface Levelling" class="rounded-lg shadow-md w-full h-auto object-cover">
+                    </div>
+                    <div>
+                        <h3 class="text-2xl font-semibold text-gray-900 mb-4">4. Turf Grass Planting</h3>
+                        <p class="text-lg text-gray-700 leading-relaxed mb-8">
+                            Durable, low-maintenance cow grass was selected. Nearly 45,000 square feet of grass sod was planted, covering 60% of the field. This stage heavily involved "gotong-royong" programs with alumni, staff, parents, and students.
+                        </p>
+                        <img src="https://placehold.co/600x400/EEEEEE/333333?text=Community+Planting+Grass" alt="Community Planting" class="rounded-lg shadow-md w-full h-auto object-cover">
+                    </div>
+                </div>
+
+                <!-- Activity 5, 6, 7 -->
+                <div class="space-y-16">
+                    <div>
+                        <h3 class="text-2xl font-semibold text-gray-900 mb-4">5. Irrigation & Turf Growth Monitoring</h3>
+                        <p class="text-lg text-gray-700 leading-relaxed mb-8">
+                            Ensuring the new turf survived the dry season was a major challenge. A system of poly pipes, sprinklers, a water pump, and tanks was installed. Manual watering was also required for critical spots.
+                        </p>
+                        <img src="https://placehold.co/800x400/EEEEEE/333333?text=Irrigation+System+Layout" alt="Irrigation System" class="rounded-lg shadow-md w-full h-auto object-cover">
+                    </div>
+                    
+                    <div>
+                        <h3 class="text-2xl font-semibold text-gray-900 mb-4">6. Top Dressing & Soil Aeration</h3>
+                        <p class="text-lg text-gray-700 leading-relaxed mb-8">
+                            To create a perfectly level playing surface, two stages of top dressing were performed. Fine sand was applied manually to uneven areas, and later, a thin layer was applied by machine after aeration to promote healthy growth.
+                        </p>
+                        <img src="https://placehold.co/800x400/EEEEEE/333333?text=Top+Dressing+with+Machine" alt="Top Dressing" class="rounded-lg shadow-md w-full h-auto object-cover">
+                    </div>
+
+                    <div>
+                        <h3 class="text-2xl font-semibold text-gray-900 mb-4">7. Compost & Fertilizer Application</h3>
+                        <p class="text-lg text-gray-700 leading-relaxed">
+                            Compost was applied before planting to improve soil health. After 3 months, fertilizer was applied to provide concentrated nutrients. This application is recommended every 3 months for sustainable long-term turf health.
+                        </p>
+                    </div>
+                </div>
+
+            </div>
+        </section>
+
+        <!-- Gallery / Community Involvement -->
+        <section id="gallery" class="py-20 md:py-28 px-6 lg:px-8 bg-gray-50">
+            <div class="max-w-7xl mx-auto">
+                <h2 class="text-3xl md:text-4xl font-bold text-center text-blue-900 mb-8">Community Involvement</h2>
+                <p class="text-xl text-gray-700 text-center max-w-3xl mx-auto mb-16">
+                    The "gotong-royong" effort saw incredible involvement from SDARA, students, and parents. This engagement helped instill a sense of shared ownership and pride in the newly rehabilitated field.
+                </p>
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <img src="https://placehold.co/600x450/EEEEEE/333333?text=Community+Photo+1" alt="Community Involvement 1" class="rounded-lg shadow-md w-full h-auto object-cover aspect-video">
+                    <img src="https://placehold.co/600x450/EEEEEE/333333?text=Community+Photo+2" alt="Community Involvement 2" class="rounded-lg shadow-md w-full h-auto object-cover aspect-video">
+                    <img src="https://placehold.co/600x450/EEEEEE/333333?text=Community+Photo+3" alt="Community Involvement 3" class="rounded-lg shadow-md w-full h-auto object-cover aspect-video">
+                    <img src="https://placehold.co/600x450/EEEEEE/333333?text=Community+Photo+4" alt="Community Involvement 4" class="rounded-lg shadow-md w-full h-auto object-cover aspect-video">
+                    <img src="https://placehold.co/600x450/EEEEEE/333333?text=Community+Photo+5" alt="Community Involvement 5" class="rounded-lg shadow-md w-full h-auto object-cover aspect-video">
+                    <img src="https://placehold.co/600x450/EEEEEE/333333?text=Community+Photo+6" alt="Community Involvement 6" class="rounded-lg shadow-md w-full h-auto object-cover aspect-video">
+                    <img src="https://placehold.co/600x450/EEEEEE/333333?text=Community+Photo+7" alt="Community Involvement 7" class="rounded-lg shadow-md w-full h-auto object-cover aspect-video">
+                    <img src="httpsimg src="https://placehold.co/600x450/EEEEEE/333333?text=Community+Photo+8" alt="Community Involvement 8" class="rounded-lg shadow-md w-full h-auto object-cover aspect-video">
+                </div>
+            </div>
+        </section>
+
+        <!-- Challenges & Recommendations -->
+        <section id="challenges" class="py-20 md:py-28 px-6 lg:px-8">
+            <div class="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-16">
+                <div>
+                    <h2 class="text-3xl font-bold text-blue-900 mb-8">Challenges Encountered</h2>
+                    <ul class="space-y-4">
+                        <li class="flex items-start">
+                            <span class="text-red-500 font-bold text-xl mr-3">&raquo;</span>
+                            <span class="text-gray-700 text-lg">Managing irrigation timing during the heat wave and dry spell.</span>
+                        </li>
+                        <li class="flex items-start">
+                            <span class="text-red-500 font-bold text-xl mr-3">&raquo;</span>
+                            <span class="text-gray-700 text-lg">Coordinating delivery and site work across multiple stakeholders.</span>
+                        </li>
+                        <li class="flex items-start">
+                            <span class="text-red-500 font-bold text-xl mr-3">&raquo;</span>
+                            <span class="text-gray-700 text-lg">Unforeseen minor delays due to weather and labor-intensive manual tasks.</span>
+                        </li>
+                        <li class="flex items-start">
+                            <span class="text-red-500 font-bold text-xl mr-3">&raquo;</span>
+                            <span class="text-gray-700 text-lg">Inability to implement total field closure due to ongoing school activities.</span>
+                        </li>
+                    </ul>
+                </div>
+                <div>
+                    <h2 class="text-3xl font-bold text-blue-900 mb-8">Recommendations & Future Work</h2>
+                    <ul class="space-y-4">
+                        <li class="flex items-start">
+                            <span class="text-green-600 font-bold text-xl mr-3">&raquo;</span>
+                            <span class="text-gray-700 text-lg">Continue scheduled maintenance: regular grass cutting, top dressing, and fertilization.</span>
+                        </li>
+                        <li class="flex items-start">
+                            <span class="text-green-600 font-bold text-xl mr-3">&raquo;</span>
+                            <span class="text-gray-700 text-lg">Monitor subsoil drainage performance during heavy rains.</span>
+                        </li>
+                        <li class="flex items-start">
+                            <span class="text-green-600 font-bold text-xl mr-3">&raquo;</span>
+                            <span class="text-gray-700 text-lg">Acquire basic field maintenance equipment (e.g., grass cutter, drag-mat).</span>
+                        </li>
+                        <li class="flex items-start">
+                            <span class="text-green-600 font-bold text-xl mr-3">&raquo;</span>
+                            <span class="text-gray-700 text-lg">Plan for Phase 2 upgrades, which may include a covered pavilion.</span>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <!-- Comments Section -->
+        <section id="comments" class="py-20 md:py-28 px-6 lg:px-8 bg-gray-50">
+            <div class="max-w-4xl mx-auto">
+                <h2 class="text-3xl md:text-4xl font-bold text-center text-blue-900 mb-16">Community Feedback</h2>
+                
+                <!-- Comment Form -->
+                <div class="bg-white p-8 rounded-lg shadow-lg mb-12">
+                    <h3 class="text-2xl font-semibold text-gray-900 mb-6">Leave a Comment</h3>
+                    <form id="comment-form" class="space-y-4">
+                        <div>
+                            <label for="comment-name" class="block text-sm font-medium text-gray-700 mb-1">Your Name</label>
+                            <input type="text" id="comment-name" name="name" class="w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g., John Doe '99" required>
+                        </div>
+                        <div>
+                            <label for="comment-text" class="block text-sm font-medium text-gray-700 mb-1">Your Comment</label>
+                            <textarea id="comment-text" name="comment" rows="4" class="w-full px-4 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Share your thoughts on the project..." required></textarea>
+                        </div>
+                        <div class="text-right">
+                            <button id="comment-submit-button" type="submit" class="inline-flex items-center bg-blue-700 text-white font-semibold px-6 py-2 rounded-lg shadow hover:bg-blue-800 transition-colors disabled:opacity-50">
+                                <svg id="comment-spinner" class="animate-spin -ml-1 mr-3 h-5 w-5 text-white hidden" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                Submit Comment
+                            </button>
+                        </div>
+                    </form>
+                    <p class="text-xs text-gray-500 mt-4 text-center">
+                        Note: All comments are subject to admin approval and may take a moment to appear.
+                    </p>
+                </div>
+
+                <!-- Comments List -->
+                <h3 class="text-2xl font-semibold text-gray-900 mb-6">Approved Comments</h3>
+                <div id="comments-list" class="space-y-6">
+                    <!-- Comments will be dynamically loaded here -->
+                    <p class="text-gray-500 text-center">Loading comments...</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Conclusion -->
+        <section id="conclusion" class="py-20 md:py-28 px-6 lg:px-8 bg-gradient-to-r from-blue-900 to-blue-800 text-white">
+            <div class="max-w-4xl mx-auto text-center">
+                <h2 class="text-3xl md:text-4xl font-bold mb-8">A Successful Collaboration</h2>
+                <p class="text-xl text-blue-100 leading-relaxed mb-12">
+                    The SDAR Field Rehabilitation Project was successfully completed through strong collaboration between SDARA, PASL, and the School's Administration. The project was achieved at a minimal cost (approx. RM1/sq ft) thanks to the powerful support and commitment from every party involved. This project, initiated by SDARIANS for SDARIANS, is a true portrayal of their unconditional love for the school and reflects the true spirit of "BERILMU UNTUUK BERJASA".
+                </D>
+                <p class="text-3xl font-extrabold text-yellow-400 tracking-wider">
+                    ONCE A SDARIAN, ALWAYS A SDARIAN
+                </p>
+            </div>
+        </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-gray-900 text-gray-400">
+        <div class="max-w-7xl mx-auto px-6 lg:px-8 py-12 flex flex-col md:flex-row justify-between items-center text-center md:text-left">
+            <p class="text-sm">&copy; 2025 SDARA & Persatuan Alumni SDAR LIONS. All rights reserved.</p>
+            <p class="text-sm mt-4 md:mt-0">Website by SDARA Technical Team</p>
+        </div>
+    </footer>
+
+</body>
+</html>
