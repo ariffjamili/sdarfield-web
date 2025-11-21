@@ -1,5 +1,5 @@
 ---
 deployment:
   tasks:
-  - export DEPLOYPATH=/Users/ariffjamili/Sites/sdarfield/
+  - export DEPLOYPATH=/home/sdara/public_html/sdarfield/
   - /bin/cp -R * $DEPLOYPATH
