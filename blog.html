@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Latest Updates - SDAR Field Rehabilitation Project</title>
+    
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Google Font (Inter) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- Firebase SDK Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getFirestore, collection, query, orderBy, getDocs, doc, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Firebase Configuration ---
+        const firebaseConfig = {
+          apiKey: "AIzaSyC3AK7ajQ8yzn9xwTy4PniDv_7bz97FwMA",
+          authDomain: "sdar-field-rehab.firebaseapp.com",
+          projectId: "sdar-field-rehab",
+          storageBucket: "sdar-field-rehab.firebasestorage.app",
+          messagingSenderId: "70995705826",
+          appId: "1:70995705826:web:9a027ee70f70b818f943bb"
+        };
+        
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const appId = firebaseConfig.appId;
+
+        // --- DOM Elements ---
+        const postsContainer = document.getElementById('posts-container');
+        const loader = document.getElementById('loader');
+        const mobileMenu = document.getElementById('mobile-menu');
+        const menuButton = document.getElementById('menu-button');
+
+        // --- Logic ---
+        
+        async function loadPosts() {
+            try {
+                const postsRef = collection(db, `artifacts/${appId}/public/data/posts`);
+                // Query ordered by timestamp descending
+                // Note: If you see index errors in console, you might need to create an index in Firebase console.
+                // However, simple orderBy on a single field often works without manual index creation for small datasets.
+                // If it fails, we can fetch all and sort client side like we did for comments.
+                
+                let q = query(postsRef, orderBy("timestamp", "desc"));
+                let snapshot;
+
+                try {
+                     snapshot = await getDocs(q);
+                } catch (e) {
+                    console.warn("Index might be missing, falling back to client-side sort", e);
+                    const allDocs = await getDocs(postsRef);
+                    const docs = allDocs.docs.map(d => ({id: d.id, ...d.data()}));
+                    docs.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
+                    renderPosts(docs);
+                    return;
+                }
+
+                const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderPosts(docs);
+
+            } catch (error) {
+                console.error("Error loading posts:", error);
+                postsContainer.innerHTML = '<p class="text-center text-red-500 py-10">Failed to load updates. Please try again later.</p>';
+            } finally {
+                loader.classList.add('hidden');
+            }
+        }
+
+        function renderPosts(posts) {
+            if (posts.length === 0) {
+                postsContainer.innerHTML = '<p class="text-center text-gray-500 py-10">No updates posted yet.</p>';
+                return;
+            }
+
+            postsContainer.innerHTML = '';
+            posts.forEach(post => {
+                const dateStart = post.timestamp ? new Date(post.timestamp.seconds * 1000).toLocaleDateString("en-US", { year: 'numeric', month: 'long', day: 'numeric' }) : 'Date Unavailable';
+                
+                const article = document.createElement('article');
+                article.className = "flex flex-col bg-white rounded-xl shadow-lg overflow-hidden border border-gray-100 hover:shadow-xl transition-shadow duration-300";
+                
+                let imageHtml = '';
+                if (post.imageUrl) {
+                    imageHtml = `<div class="h-64 w-full bg-gray-100 overflow-hidden relative group">
+                        <img src="${escapeHTML(post.imageUrl)}" alt="${escapeHTML(post.title)}" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105">
+                    </div>`;
+                } else {
+                     // Fallback placeholder pattern if no image
+                    imageHtml = `<div class="h-48 w-full bg-gradient-to-r from-blue-50 to-blue-100 flex items-center justify-center">
+                        <svg class="w-12 h-12 text-blue-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 8h6v4H7V8z"></path></svg>
+                    </div>`;
+                }
+
+                article.innerHTML = `
+                    ${imageHtml}
+                    <div class="p-6 md:p-8 flex flex-col flex-grow">
+                        <div class="mb-4">
+                            <span class="text-sm font-semibold text-blue-600 bg-blue-50 px-3 py-1 rounded-full">${dateStart}</span>
+                        </div>
+                        <h2 class="text-2xl font-bold text-gray-900 mb-4 hover:text-blue-700 transition-colors">${escapeHTML(post.title)}</h2>
+                        <div class="prose prose-blue max-w-none text-gray-600 mb-6 flex-grow">
+                             ${formatContent(post.content)}
+                        </div>
+                    </div>
+                `;
+                postsContainer.appendChild(article);
+            });
+        }
+
+        function escapeHTML(str) {
+            if (!str) return "";
+            return str.replace(/[&<>"']/g, function(m) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m];
+            });
+        }
+
+        function formatContent(content) {
+            if (!content) return "";
+            // Convert newlines to <br> for simple formatting
+            return escapeHTML(content).replace(/\n/g, '<br>');
+        }
+
+        // --- Event Listeners ---
+        window.addEventListener('load', loadPosts);
+        
+        // Mobile Menu Toggle
+        menuButton.addEventListener('click', () => {
+            mobileMenu.classList.toggle('hidden');
+        });
+
+    </script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800 flex flex-col min-h-screen">
+
+    <!-- Header & Navigation -->
+    <nav class="sticky top-0 z-50 bg-white/95 backdrop-blur-sm shadow-md">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-20">
+                <!-- Logo & Title -->
+                <a href="index.html" class="flex items-center space-x-4 hover:opacity-80 transition-opacity">
+                    <img src="images/sdara_logo.png" alt="SDARA Logo" class="h-10 w-10 rounded-full">
+                    <span class="text-xl sm:text-2xl font-bold text-blue-900 hidden md:block">Field Rehabilitation<br>Project</span>
+                </a>
+                
+                <!-- Desktop Nav -->
+                <div class="hidden md:flex items-center space-x-6">
+                    <a href="index.html#overview" class="text-gray-600 hover:text-blue-700 font-medium transition-colors">Overview</a>
+                    <a href="index.html#timeline" class="text-gray-600 hover:text-blue-700 font-medium transition-colors">Timeline</a>
+                    <a href="index.html#gallery" class="text-gray-600 hover:text-blue-700 font-medium transition-colors">Gallery</a>
+                    <a href="blog.html" class="text-blue-700 font-bold border-b-2 border-blue-700">Updates</a>
+                    <a href="index.html#comments" class="text-gray-600 hover:text-blue-700 font-medium transition-colors">Comments</a>
+                    <a href="index.html#conclusion" class="bg-blue-700 text-white px-4 py-2 rounded-md text-sm font-semibold shadow-lg hover:bg-blue-800 transition-colors">Conclusion</a>
+                </div>
+
+                <!-- Mobile Menu Button -->
+                <div class="md:hidden flex items-center">
+                    <button id="menu-button" class="inline-flex items-center justify-center p-2 rounded-md text-gray-500 hover:text-gray-700 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500">
+                        <span class="sr-only">Open main menu</span>
+                        <svg class="h-6 w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Mobile Menu -->
+        <div id="mobile-menu" class="hidden md:hidden bg-white shadow-lg border-t border-gray-200">
+            <div class="px-2 pt-2 pb-3 space-y-1 sm:px-3">
+                <a href="index.html#overview" class="block px-3 py-2 rounded-md text-base font-medium text-gray-700 hover:bg-gray-100">Overview</a>
+                <a href="index.html#timeline" class="block px-3 py-2 rounded-md text-base font-medium text-gray-700 hover:bg-gray-100">Timeline</a>
+                <a href="index.html#gallery" class="block px-3 py-2 rounded-md text-base font-medium text-gray-700 hover:bg-gray-100">Gallery</a>
+                <a href="blog.html" class="block px-3 py-2 rounded-md text-base font-medium text-blue-700 bg-blue-50">Updates</a>
+                <a href="index.html#comments" class="block px-3 py-2 rounded-md text-base font-medium text-gray-700 hover:bg-gray-100">Comments</a>
+                <a href="index.html#conclusion" class="block px-3 py-2 rounded-md text-base font-medium text-white bg-blue-700 hover:bg-blue-800">Conclusion</a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="flex-grow w-full max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        <header class="text-center mb-16">
+            <h1 class="text-4xl md:text-5xl font-extrabold text-blue-900 mb-4 tracking-tight">Project Updates</h1>
+            <p class="text-xl text-gray-600 max-w-2xl mx-auto">Latest news, milestones, and announcements from the SDAR Field Rehabilitation Project team.</p>
+        </header>
+
+        <!-- Loader -->
+        <div id="loader" class="flex justify-center items-center py-20">
+            <svg class="animate-spin h-10 w-10 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+        </div>
+
+        <!-- Posts List -->
+        <div id="posts-container" class="space-y-12">
+            <!-- Posts injected here -->
+        </div>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="bg-blue-900 text-white py-12">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8 text-center md:text-left">
+                <div>
+                    <h3 class="text-lg font-semibold mb-4 text-blue-100">About the Project</h3>
+                    <p class="text-sm text-blue-200 leading-relaxed">
+                        A collaborative effort to rehabilitate the SDAR playing field, fostering excellence in sports and student life. "Berilmu Untuk Berjasa".
+                    </p>
+                </div>
+                <div>
+                    <h3 class="text-lg font-semibold mb-4 text-blue-100">Contact SDARA</h3>
+                    <p class="text-sm text-blue-200">
+                        Email: secretariat@sdara.org<br>
+                        Phone: +60 3-1234 5678
+                    </p>
+                </div>
+                <div>
+                    <h3 class="text-lg font-semibold mb-4 text-blue-100">Quick Links</h3>
+                    <div class="flex flex-col space-y-2 text-sm text-blue-200">
+                        <a href="index.html" class="hover:text-white transition">Home</a>
+                        <a href="blog.html" class="hover:text-white transition">Latest Updates</a>
+                        <a href="index.html#timeline" class="hover:text-white transition">Timeline</a>
+                    </div>
+                </div>
+            </div>
+            <div class="border-t border-blue-800 mt-12 pt-8 text-center text-sm text-blue-300">
+                &copy; 2025 SDAR Field Rehabilitation Project. All rights reserved.
+            </div>
+        </div>
+    </footer>
+
+</body>
+</html>
