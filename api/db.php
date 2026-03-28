@@ -13,7 +13,7 @@ define('DB_PASS', 'Sikamat70400');
 // Generate with: php -r "echo password_hash('yourpassword', PASSWORD_DEFAULT);"
 // Replace the string below with the output of that command.
 // ---------------------------------------------------------------
-define('ADMIN_PASSWORD_HASH', '$2y$12$r/INwxDFFXlphazZmXPvEOOfzAx2G8n/cU5a1Dd2LqZy1dbsRFxz.%');
+define('ADMIN_PASSWORD_HASH', '$2y$12$6Oz7WaITnDjVcZCAIIVYnehSmSUg2VirDYlwu71VplMSMgNzzviLy');
 
 // ---------------------------------------------------------------
 // Returns a PDO connection. Called by API files.
